@@ -21,7 +21,7 @@ including a hello world program for userfaultfd based upon code from the
 ```bash
 mkdir build
 cd build
-cmake -DCMAKE_INSTALL_PREFIX = <where you want the sofware> ..
+cmake -DCMAKE_INSTALL_PREFIX=<where you want the sofware> ..
 make install
 ```
 
@@ -47,6 +47,8 @@ If you have build problems, we have comprehensive
 
 - The license is [LGPL](/LICENSE).
 - [thirdparty_licenses.md](/thirdparty_licenses.md)
+
+`LLNL-CODE-733797`
 
 ## Contact
 

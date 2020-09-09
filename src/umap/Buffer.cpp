@@ -188,10 +188,12 @@ void Buffer::evict_region(RegionDescriptor* rd)
     lock();
     while ( rd->count() ) {
       auto pd = rd->get_next_page_descriptor();
-      pd->deferred = true;
-      wait_for_page_state(pd, PageDescriptor::State::PRESENT);
-      pd->set_state_leaving();
-      m_rm.get_evict_manager()->schedule_eviction(pd);
+      if(pd->state != PageDescriptor::State::LEAVING ){
+	pd->deferred = true;
+	wait_for_page_state(pd, PageDescriptor::State::PRESENT);
+	pd->set_state_leaving();
+	m_rm.get_evict_manager()->schedule_eviction(pd);
+      }
       wait_for_page_state(pd, PageDescriptor::State::FREE);
     }
     unlock();
@@ -371,8 +373,6 @@ void Buffer::wait_for_page_state( PageDescriptor* pd, PageDescriptor::State st)
     ++m_stats.waits;
     ++m_waits_for_state_change;
 
-    ++m_stats.waits;
-    ++m_waits_for_state_change;
     pthread_cond_wait(&m_state_change_cond, &m_mutex);
 
     --m_waits_for_state_change;
