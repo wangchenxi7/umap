@@ -73,7 +73,7 @@ namespace Umap {
 
       BufferStats m_stats;
 
-      bool is_adaptor_on;
+      volatile bool is_adaptor_on;
       pthread_t adaptThread;
       void adapt_free_pages(void);
       static void* AdaptThreadEntryFunc(void * obj){

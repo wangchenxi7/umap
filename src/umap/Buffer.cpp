@@ -317,6 +317,7 @@ void Buffer::fetch_and_pin(char* paddr, uint64_t size)
 void Buffer::adapt_free_pages(void)
 {
   const size_t avg_filled_pages_per_epoch = 1024;
+  const uint64_t mem_margin_kb = 16777216;
   
   while( is_adaptor_on ){
 
@@ -338,8 +339,9 @@ void Buffer::adapt_free_pages(void)
       // ignore rest of the line
       file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
+    mem_free_kb = (mem_free_kb > mem_margin_kb) ?(mem_free_kb-mem_margin_kb) : 0;
     uint64_t psize = (m_rm).get_umap_page_size();
-    uint64_t max_num_free_pages = mem_free_kb * 1024 * 90/100 /psize;
+    uint64_t max_num_free_pages = mem_free_kb * 1024 / psize;
 
     size_t num_busy_pages = (m_busy_pages).size();
     size_t num_pending_pages = m_size - num_busy_pages;//include filling and free pages
@@ -380,7 +382,7 @@ void Buffer::adapt_free_pages(void)
 	unlock();
       }//End of enlarging the buffer
       
-    }else{
+    }else if (num_pending_pages > (max_num_free_pages*110/100)){
       /* reduce free pages if free memory has reduced */      
       lock();
       uint64_t diff = (m_size - m_busy_pages.size()) - max_num_free_pages;
