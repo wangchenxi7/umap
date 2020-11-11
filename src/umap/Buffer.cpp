@@ -312,6 +312,106 @@ void Buffer::fetch_and_pin(char* paddr, uint64_t size)
   unlock();
 }
 
+
+  
+void Buffer::adapt_free_pages(void)
+{
+  const size_t avg_filled_pages_per_epoch = 1024;
+  
+  while( is_adaptor_on ){
+
+    /* Check the current max pages allowed in memory */
+    /* max_pages_in_mem is 90% Free Memory */
+    /* We don't use AvailableMemory here because it may evict cached data */
+    uint64_t mem_free_kb = 0;
+    std::string token;
+    std::ifstream file("/proc/meminfo");
+    while (file >> token) {
+      unsigned long mem;
+      if (token == "MemAvailable:") {
+	if (file >> mem) {
+	  mem_free_kb = mem;
+	} else {
+	  UMAP_ERROR("UMAP unable to determine MemFree\n");
+	}
+      }
+      // ignore rest of the line
+      file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    uint64_t psize = (m_rm).get_umap_page_size();
+    uint64_t max_num_free_pages = mem_free_kb * 1024 * 90/100 /psize;
+
+    size_t num_busy_pages = (m_busy_pages).size();
+    size_t num_pending_pages = m_size - num_busy_pages;//include filling and free pages
+    
+    UMAP_LOG(Info, "m_size (total buffer size) = " << m_size 
+	     << ", num_free_pages = " <<  m_free_pages.size()
+	     << ", num_busy_pages = " << num_busy_pages
+	     << ", num_pending_pages = " << num_pending_pages
+	     << ", max_num_free_pages = " << max_num_free_pages);
+
+    if( num_pending_pages < max_num_free_pages){
+
+      if( (num_pending_pages < avg_filled_pages_per_epoch) &&
+	  (num_pending_pages + avg_filled_pages_per_epoch) < max_num_free_pages){
+
+	/* increase free pages if free memory has increased and free pages are almost used up */  
+	lock();
+	uint64_t diff = max_num_free_pages - (m_size - m_busy_pages.size());
+	
+	/*TODO: free in destructor */
+	PageDescriptor *m_array_new = (PageDescriptor *)calloc(diff, sizeof(PageDescriptor));
+	if ( m_array_new == nullptr ){
+	  //do nothing 
+	  UMAP_LOG(Info, "Failed to allocate additional " << diff
+		   << " page descriptors");
+	}else{
+	  for ( int i = 0; i < diff; ++i )
+	    m_free_pages.push_back(&m_array_new[i]);
+
+	  m_size += diff;
+	  m_evict_low_water = apply_int_percentage(m_rm.get_evict_low_water_threshold(), m_size);
+	  m_evict_high_water = apply_int_percentage(m_rm.get_evict_high_water_threshold(), m_size);
+
+	  UMAP_LOG(Info, "Increase to free_pages=" << m_free_pages.size()
+		   << ", m_busy_pages=" << m_busy_pages.size() 
+		   << ", m_size=" << m_size );
+	}
+	unlock();
+      }//End of enlarging the buffer
+      
+    }else{
+      /* reduce free pages if free memory has reduced */      
+      lock();
+      uint64_t diff = (m_size - m_busy_pages.size()) - max_num_free_pages;
+      if( diff > m_free_pages.size() ){
+        if(m_busy_pages.size()==0)
+          UMAP_ERROR("no free memory for page caching" );
+	
+        diff = m_free_pages.size();
+      }
+
+      /* TODO: free allocated free pages */
+      m_free_pages.resize(m_free_pages.size() - diff);
+      m_size = m_size - diff;
+      m_evict_low_water = apply_int_percentage(m_rm.get_evict_low_water_threshold(), m_size);
+      m_evict_high_water = apply_int_percentage(m_rm.get_evict_high_water_threshold(), m_size);
+      unlock();
+
+      UMAP_LOG(Info, "Reduce to m_size (total buffer size) = " << m_size 
+	       << ", num_free_pages = " << m_free_pages.size()
+	       << ", num_busy_pages = " << m_busy_pages.size()
+	       << ", max_num_free_pages = " << max_num_free_pages);
+      
+    }
+    
+    sleep(60);
+    
+  }//End of loop
+
+  UMAP_LOG(Info, "adapt_free_pages ends");
+}
+
   
 void Buffer::process_page_event(char* paddr, bool iswrite, RegionDescriptor* rd)
 {
@@ -504,6 +604,12 @@ Buffer::Buffer( void )
 
   m_evict_low_water = apply_int_percentage(m_rm.get_evict_low_water_threshold(), m_size);
   m_evict_high_water = apply_int_percentage(m_rm.get_evict_high_water_threshold(), m_size);
+
+  is_adaptor_on = true;
+  int ret = pthread_create( &adaptThread, NULL, AdaptThreadEntryFunc, this);
+  if (ret) {
+    UMAP_ERROR("Failed to launch adaptThread");
+  }
 }
 
 Buffer::~Buffer( void ) {
@@ -511,6 +617,13 @@ Buffer::~Buffer( void ) {
   std::cout << m_stats << std::endl;
 #endif
 
+  if( is_adaptor_on ){
+    is_adaptor_on = false;
+    UMAP_LOG(Info, "is_adaptor_on disabled" );
+    pthread_join( adaptThread , NULL );
+    UMAP_LOG(Info, "adaptThread terminated" );
+  }
+  
   assert("Pages are still present" && m_present_pages.size() == 0);
   pthread_cond_destroy(&m_avail_pd_cond);
   pthread_cond_destroy(&m_state_change_cond);
